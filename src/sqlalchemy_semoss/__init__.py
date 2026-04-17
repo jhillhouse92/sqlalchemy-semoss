@@ -25,7 +25,7 @@ Quick start::
     User.find(name="Alice")
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 # DB-API 2.0
 from .dbapi import connect, SemossConnection, SemossCursor

@@ -222,6 +222,15 @@ class SemossCursor:
         """Escape a Python value for safe SQL interpolation."""
         if value is None:
             return "NULL"
+        # Handle pandas/numpy NA-like sentinels (NaT, NaN, NA)
+        try:
+            import pandas as pd
+            if isinstance(value, type(pd.NaT)) or value is pd.NaT:
+                return "NULL"
+            if pd.isna(value):
+                return "NULL"
+        except (ImportError, TypeError, ValueError):
+            pass
         if isinstance(value, bool):
             return "TRUE" if value else "FALSE"
         if isinstance(value, (int, float)):
@@ -283,8 +292,15 @@ class SemossCursor:
         try:
             import pandas as pd
             if isinstance(raw_result, pd.DataFrame):
-                columns = list(raw_result.columns)
-                rows = [tuple(row) for row in raw_result.itertuples(index=False)]
+                # Replace pandas NA sentinels (NaT, NaN, NA) with Python None
+                # so downstream code sees standard None instead of pd.NaT/NaN
+                df = raw_result.where(raw_result.notna(), other=None)
+                columns = list(df.columns)
+                rows = [
+                    tuple(None if v is None or (isinstance(v, float) and v != v) else v
+                          for v in row)
+                    for row in df.itertuples(index=False)
+                ]
                 return rows, columns
         except ImportError:
             pass
