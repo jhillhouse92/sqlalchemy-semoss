@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sqlalchemy-semoss"
+version = "0.1.0"
+description = "SQLAlchemy dialect and Active Record ORM for SEMOSS databases"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [{name = "Joseph Hillhouse"}]
+keywords = ["semoss", "sqlalchemy", "database", "orm", "dialect", "db-api"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Database :: Front-Ends",
+]
+dependencies = [
+    "sqlalchemy>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov"]
+
+[project.urls]
+Homepage = "https://github.com/jhillhouse92/sqlalchemy-semoss"
+Documentation = "https://github.com/jhillhouse92/sqlalchemy-semoss#readme"
+Repository = "https://github.com/jhillhouse92/sqlalchemy-semoss"
+Issues = "https://github.com/jhillhouse92/sqlalchemy-semoss/issues"
+
+[project.entry-points."sqlalchemy.dialects"]
+semoss = "sqlalchemy_semoss.dialect:SemossDialect"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
