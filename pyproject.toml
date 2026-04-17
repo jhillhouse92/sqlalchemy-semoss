@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sqlalchemy-semoss"
-version = "0.1.0"
+version = "0.1.1"
 description = "SQLAlchemy dialect and Active Record ORM for SEMOSS databases"
 readme = "README.md"
 license = "MIT"
