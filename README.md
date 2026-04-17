@@ -197,7 +197,7 @@ The SEMOSS `DatabaseEngine` exposes four methods. The driver classifies each SQL
 | `DELETE`, `TRUNCATE` | `database.removeData(query=sql)` |
 | `CREATE`, `ALTER`, `DROP` | `database.execQuery(query=sql)` |
 
-**INSERT ... RETURNING:** The router strips the `RETURNING` clause, executes via `insertData`, then fetches the newly inserted row with a follow-up `SELECT`.
+**INSERT ... RETURNING:** DML statements with a `RETURNING` clause are routed through `execQuery` (not `insertData`) since they return a result set. This is how `save()` populates auto-generated fields like primary keys.
 
 ### Parameter Interpolation
 

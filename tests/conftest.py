@@ -19,6 +19,9 @@ class MockDatabaseEngine:
         q = query.strip().upper()
         if q.startswith("CREATE") or q.startswith("ALTER") or q.startswith("DROP"):
             raise Exception("No results were returned by the query.")
+        # DML with RETURNING — return a mock row
+        if "RETURNING" in q:
+            return [{"id": 1, "name": "mock", "email": "mock@test.com"}]
         if q.startswith("SELECT"):
             # Handle "SELECT 1 as test" style literal queries
             if "FROM" not in q:

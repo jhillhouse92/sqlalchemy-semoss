@@ -41,6 +41,12 @@ class TestClassify:
         assert SqlRouter.classify("select * from t") == "select"
         assert SqlRouter.classify("INSERT into t values (1)") == "insert"
 
+    def test_insert_returning_classified_as_select(self):
+        assert SqlRouter.classify("INSERT INTO users (name) VALUES ('a') RETURNING *") == "select"
+
+    def test_update_returning_classified_as_select(self):
+        assert SqlRouter.classify("UPDATE users SET name = 'b' RETURNING id") == "select"
+
 
 class TestExecute:
     def test_select_routes_to_exec_query(self, mock_ai_server):
@@ -52,6 +58,11 @@ class TestExecute:
         db = mock_ai_server(engine_id="test")
         result = SqlRouter.execute(db, "INSERT INTO t (a) VALUES (1)")
         assert result is None
+
+    def test_insert_returning_routes_to_exec_query(self, mock_ai_server):
+        db = mock_ai_server(engine_id="test")
+        result = SqlRouter.execute(db, "INSERT INTO t (a) VALUES (1) RETURNING *")
+        assert isinstance(result, list)
 
     def test_ddl_routes_to_exec_query(self, mock_ai_server):
         db = mock_ai_server(engine_id="test")

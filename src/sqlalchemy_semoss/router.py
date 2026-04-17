@@ -5,14 +5,13 @@ dispatches them to the correct ``ai_server.DatabaseEngine`` method.
 
 The SEMOSS ``DatabaseEngine`` exposes four methods:
 
-- ``execQuery(query=...)`` — for SELECT and DDL
-- ``insertData(query=...)`` — for INSERT
+- ``execQuery(query=...)`` — for SELECT, DDL, and DML with RETURNING
+- ``insertData(query=...)`` — for INSERT (without RETURNING)
 - ``updateData(query=...)`` — for UPDATE
 - ``removeData(query=...)`` — for DELETE
 
-For ``INSERT ... RETURNING`` statements, the router strips the RETURNING
-clause, executes via ``insertData``, then fetches the newly inserted row
-via ``execQuery`` with a follow-up SELECT.
+DML statements with a ``RETURNING`` clause are routed through ``execQuery``
+since they return a result set.
 """
 
 import re
@@ -22,8 +21,7 @@ _INSERT_RE = re.compile(r"^\s*INSERT\b", re.IGNORECASE)
 _UPDATE_RE = re.compile(r"^\s*UPDATE\b", re.IGNORECASE)
 _DELETE_RE = re.compile(r"^\s*(DELETE|TRUNCATE)\b", re.IGNORECASE)
 _DDL_RE = re.compile(r"^\s*(CREATE|ALTER|DROP|GRANT|REVOKE)\b", re.IGNORECASE)
-_RETURNING_RE = re.compile(r"\s+RETURNING\s+.+$", re.IGNORECASE)
-_INSERT_TABLE_RE = re.compile(r"^\s*INSERT\s+INTO\s+(\S+)", re.IGNORECASE)
+_RETURNING_RE = re.compile(r"\bRETURNING\b", re.IGNORECASE)
 
 
 class SqlRouter:
@@ -35,10 +33,15 @@ class SqlRouter:
     def classify(sql):
         """Classify a SQL statement.
 
+        DML with a ``RETURNING`` clause is classified as ``'select'``
+        so that the result set is parsed and returned.
+
         Returns:
             One of ``'select'``, ``'insert'``, ``'update'``, ``'delete'``,
             or ``'ddl'``.
         """
+        if _RETURNING_RE.search(sql):
+            return "select"
         if _SELECT_RE.match(sql):
             return "select"
         if _INSERT_RE.match(sql):
@@ -67,17 +70,6 @@ class SqlRouter:
         if kind in ("select", "ddl"):
             return database.execQuery(query=sql)
         elif kind == "insert":
-            returning_match = _RETURNING_RE.search(sql)
-            if returning_match:
-                insert_sql = sql[:returning_match.start()]
-                database.insertData(query=insert_sql)
-                table_match = _INSERT_TABLE_RE.match(sql)
-                if table_match:
-                    table_name = table_match.group(1)
-                    return database.execQuery(
-                        query="SELECT * FROM %s ORDER BY id DESC LIMIT 1" % table_name
-                    )
-                return None
             return database.insertData(query=sql)
         elif kind == "update":
             return database.updateData(query=sql)
