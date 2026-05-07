@@ -14,6 +14,7 @@ Usage::
 """
 
 import datetime
+import re
 
 from .exceptions import InterfaceError, ProgrammingError
 from .router import SqlRouter
@@ -23,6 +24,102 @@ from .types import STRING
 apilevel = "2.0"
 threadsafety = 1
 paramstyle = "format"
+
+# ---------------------------------------------------------------------------
+# SQL column-order parser
+# ---------------------------------------------------------------------------
+# Standard DB-API drivers receive column order from the database wire protocol.
+# Because SEMOSS returns JSON dicts (unordered relative to the SQL), we parse
+# the SQL SELECT/RETURNING clause to recover the authoritative column order.
+
+_SELECT_COLS_RE = re.compile(
+    r"^\s*SELECT\s+(?:DISTINCT\s+)?(.*?)\s+FROM\s",
+    re.IGNORECASE | re.DOTALL,
+)
+_RETURNING_COLS_RE = re.compile(
+    r"\bRETURNING\s+(.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _split_columns_paren_aware(col_string):
+    """Split a column list by commas, respecting parenthesis depth."""
+    columns = []
+    current = []
+    depth = 0
+    for char in col_string:
+        if char == "(":
+            depth += 1
+            current.append(char)
+        elif char == ")":
+            depth -= 1
+            current.append(char)
+        elif char == "," and depth == 0:
+            columns.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    if current:
+        columns.append("".join(current).strip())
+    return columns
+
+
+def _extract_column_name(col_expr):
+    """Extract the output column name from a single column expression.
+
+    Returns the alias (if AS is used), the bare column name (stripping any
+    table qualifier), or ``None`` if the name cannot be determined (e.g.
+    ``*`` or a bare expression without an alias).
+    """
+    expr = col_expr.strip()
+
+    if expr == "*" or expr.endswith(".*"):
+        return None
+
+    # Match: ... AS alias  (with optional quoting)
+    as_match = re.search(r"\bAS\s+\"?(\w+)\"?\s*$", expr, re.IGNORECASE)
+    if as_match:
+        return as_match.group(1)
+
+    # Simple identifier or table.column
+    simple_match = re.match(r"^(?:\w+\.)?(\w+)$", expr)
+    if simple_match:
+        return simple_match.group(1)
+
+    # Expression without alias (e.g. count(*), 1+1) — can't determine name
+    return None
+
+
+def _parse_column_order(sql):
+    """Parse expected column names from a SQL statement.
+
+    Returns a list of column name strings in declaration order, or ``None``
+    if the order cannot be reliably determined (SELECT *, expressions without
+    aliases, or unparseable SQL).
+    """
+    sql_stripped = sql.strip().rstrip(";")
+
+    # Try RETURNING clause first (takes priority for INSERT/UPDATE/DELETE RETURNING)
+    ret_match = _RETURNING_COLS_RE.search(sql_stripped)
+    if ret_match:
+        col_string = ret_match.group(1).strip()
+    else:
+        sel_match = _SELECT_COLS_RE.match(sql_stripped)
+        if sel_match:
+            col_string = sel_match.group(1).strip()
+        else:
+            return None
+
+    raw_cols = _split_columns_paren_aware(col_string)
+
+    names = []
+    for col_expr in raw_cols:
+        name = _extract_column_name(col_expr)
+        if name is None:
+            return None
+        names.append(name)
+
+    return names if names else None
 
 
 def connect(engine_id, insight_id=None, **kwargs):
@@ -153,7 +250,7 @@ class SemossCursor:
                 self.rowcount = -1
             return
 
-        self._process_result(raw_result, kind)
+        self._process_result(raw_result, kind, operation)
 
     def executemany(self, operation, seq_of_parameters):
         """Execute the operation for each parameter set in the sequence."""
@@ -243,9 +340,9 @@ class SemossCursor:
             return "'" + str(value) + "'"
         return "'" + str(value).replace("'", "''") + "'"
 
-    def _process_result(self, raw_result, kind):
+    def _process_result(self, raw_result, kind, sql=None):
         if kind == "select":
-            rows, columns = self._parse_select_result(raw_result)
+            rows, columns = self._parse_select_result(raw_result, sql)
             self._result_rows = rows
             if columns:
                 self.description = tuple(
@@ -264,12 +361,17 @@ class SemossCursor:
             else:
                 self.rowcount = -1
 
-    def _parse_select_result(self, raw_result):
+    def _parse_select_result(self, raw_result, sql=None):
         """Parse a SELECT response into ``(rows, columns)``.
 
         Handles multiple response shapes from ``DatabaseEngine.execQuery``:
         list of dicts, dict with ``data`` key, dict with ``headers``/``values``,
         and pandas DataFrames.
+
+        When *sql* is provided, the SELECT/RETURNING column list is parsed
+        to determine the authoritative column order.  If parsing fails or
+        columns don't match the response keys, dict key order is used as
+        fallback.
         """
         if raw_result is None:
             return [], []
@@ -277,12 +379,19 @@ class SemossCursor:
         if isinstance(raw_result, list):
             if len(raw_result) > 0 and isinstance(raw_result[0], dict):
                 columns = list(raw_result[0].keys())
+                # Attempt to reorder based on the SQL column list
+                if sql is not None:
+                    parsed_order = _parse_column_order(sql)
+                    if parsed_order is not None:
+                        response_keys = set(raw_result[0].keys())
+                        if all(col in response_keys for col in parsed_order):
+                            columns = parsed_order
                 rows = [tuple(row.get(c) for c in columns) for row in raw_result]
                 return rows, columns
             return [], []
 
         if isinstance(raw_result, dict) and "data" in raw_result:
-            return self._parse_select_result(raw_result["data"])
+            return self._parse_select_result(raw_result["data"], sql)
 
         if isinstance(raw_result, dict) and "headers" in raw_result and "values" in raw_result:
             columns = raw_result["headers"]
@@ -296,6 +405,14 @@ class SemossCursor:
                 # so downstream code sees standard None instead of pd.NaT/NaN
                 df = raw_result.where(raw_result.notna(), other=None)
                 columns = list(df.columns)
+                # Attempt to reorder based on the SQL column list
+                if sql is not None:
+                    parsed_order = _parse_column_order(sql)
+                    if parsed_order is not None:
+                        df_cols = set(df.columns)
+                        if all(col in df_cols for col in parsed_order):
+                            df = df[parsed_order]
+                            columns = parsed_order
                 rows = [
                     tuple(None if v is None or (isinstance(v, float) and v != v) else v
                           for v in row)
