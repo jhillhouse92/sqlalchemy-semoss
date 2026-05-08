@@ -122,6 +122,70 @@ def _parse_column_order(sql):
     return names if names else None
 
 
+# ---------------------------------------------------------------------------
+# Value type coercion
+# ---------------------------------------------------------------------------
+# SEMOSS returns all values as strings (DataFrame with object dtype).
+# This function infers the native Python type from the string representation.
+
+_ISO_DATE_LEN = 10  # "YYYY-MM-DD"
+_ISO_TS_MIN_LEN = 19  # "YYYY-MM-DD HH:MM:SS"
+
+
+def _coerce_value(value):
+    """Convert a string value from SEMOSS to its native Python type.
+
+    Conversion rules (applied in order):
+    - None / non-string → returned unchanged
+    - "true" / "false" (case-insensitive) → bool
+    - Integer pattern (no dot, no 'e') → int
+    - Numeric pattern → float
+    - "YYYY-MM-DD HH:MM:SS" → datetime.datetime
+    - "YYYY-MM-DD" → datetime.date
+    - Everything else → str (unchanged)
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return value
+
+    # Boolean
+    low = value.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+
+    # Integer (no decimal point, no exponent notation)
+    if "." not in value and "e" not in low:
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            pass
+
+    # Float
+    try:
+        return float(value)
+    except (ValueError, OverflowError):
+        pass
+
+    # Timestamp: "YYYY-MM-DD HH:MM:SS[.ffffff]"
+    if len(value) >= _ISO_TS_MIN_LEN and value[4] == "-" and value[10] == " ":
+        try:
+            return datetime.datetime.fromisoformat(value)
+        except ValueError:
+            pass
+
+    # Date: "YYYY-MM-DD"
+    if len(value) == _ISO_DATE_LEN and value[4] == "-" and value[7] == "-":
+        try:
+            return datetime.date.fromisoformat(value)
+        except ValueError:
+            pass
+
+    return value
+
+
 def connect(engine_id, insight_id=None, **kwargs):
     """Create a new DB-API connection to a SEMOSS database engine.
 
@@ -386,7 +450,10 @@ class SemossCursor:
                         response_keys = set(raw_result[0].keys())
                         if all(col in response_keys for col in parsed_order):
                             columns = parsed_order
-                rows = [tuple(row.get(c) for c in columns) for row in raw_result]
+                rows = [
+                    tuple(_coerce_value(row.get(c)) for c in columns)
+                    for row in raw_result
+                ]
                 return rows, columns
             return [], []
 
@@ -395,7 +462,10 @@ class SemossCursor:
 
         if isinstance(raw_result, dict) and "headers" in raw_result and "values" in raw_result:
             columns = raw_result["headers"]
-            rows = [tuple(row) for row in raw_result["values"]]
+            rows = [
+                tuple(_coerce_value(v) for v in row)
+                for row in raw_result["values"]
+            ]
             return rows, columns
 
         try:
@@ -414,7 +484,7 @@ class SemossCursor:
                             df = df[parsed_order]
                             columns = parsed_order
                 rows = [
-                    tuple(None if v is None or (isinstance(v, float) and v != v) else v
+                    tuple(_coerce_value(v) if v is not None else None
                           for v in row)
                     for row in df.itertuples(index=False)
                 ]

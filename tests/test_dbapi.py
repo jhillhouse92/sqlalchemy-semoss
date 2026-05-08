@@ -1,10 +1,13 @@
 """Tests for the DB-API 2.0 layer."""
 
+import datetime
+
 from sqlalchemy_semoss.dbapi import (
     connect,
     SemossConnection,
     SemossCursor,
     _parse_column_order,
+    _coerce_value,
 )
 
 
@@ -149,3 +152,122 @@ class TestColumnOrdering:
         row = cursor.fetchone()
         assert row is not None
         assert len(row) == 3
+
+
+class TestCoerceValue:
+    """Unit tests for _coerce_value type inference."""
+
+    def test_none_passthrough(self):
+        assert _coerce_value(None) is None
+
+    def test_non_string_passthrough(self):
+        assert _coerce_value(42) == 42
+        assert _coerce_value(3.14) == 3.14
+        assert _coerce_value(True) is True
+
+    def test_bool_true(self):
+        assert _coerce_value("true") is True
+        assert _coerce_value("True") is True
+        assert _coerce_value("TRUE") is True
+
+    def test_bool_false(self):
+        assert _coerce_value("false") is False
+        assert _coerce_value("False") is False
+        assert _coerce_value("FALSE") is False
+
+    def test_integer(self):
+        assert _coerce_value("1") == 1
+        assert _coerce_value("42") == 42
+        assert _coerce_value("-7") == -7
+        assert _coerce_value("0") == 0
+
+    def test_float(self):
+        assert _coerce_value("19.99") == 19.99
+        assert _coerce_value("3.14") == 3.14
+        assert _coerce_value("-0.5") == -0.5
+        assert _coerce_value("95.5") == 95.5
+
+    def test_float_scientific(self):
+        assert _coerce_value("1e10") == 1e10
+        assert _coerce_value("2.5E-3") == 2.5e-3
+
+    def test_date(self):
+        assert _coerce_value("1990-03-25") == datetime.date(1990, 3, 25)
+        assert _coerce_value("2000-12-31") == datetime.date(2000, 12, 31)
+
+    def test_timestamp(self):
+        assert _coerce_value("2024-06-15 10:30:00") == datetime.datetime(2024, 6, 15, 10, 30, 0)
+        assert _coerce_value("2025-01-01 00:00:00") == datetime.datetime(2025, 1, 1, 0, 0, 0)
+
+    def test_plain_string_unchanged(self):
+        assert _coerce_value("Alice") == "Alice"
+        assert _coerce_value("hello world") == "hello world"
+        assert _coerce_value("") == ""
+
+    def test_string_not_matching_patterns(self):
+        assert _coerce_value("not-a-date") == "not-a-date"
+        assert _coerce_value("12abc") == "12abc"
+
+
+class TestTypeCoercionIntegration:
+    """Integration: string values from SEMOSS get coerced to native types."""
+
+    def test_list_of_dicts_values_coerced(self, mock_ai_server):
+        """Simulate SEMOSS response as list-of-dicts with all-string values."""
+        conn = connect(engine_id="test-id")
+        cursor = conn.cursor()
+
+        # Simulate what the real server returns (all strings)
+        raw = [
+            {
+                "id": "1",
+                "name": "Alice",
+                "price": "19.99",
+                "active": "true",
+                "created_at": "2024-06-15 10:30:00",
+                "birth_date": "1990-03-25",
+            }
+        ]
+
+        rows, columns = cursor._parse_select_result(raw)
+
+        assert len(rows) == 1
+        row = rows[0]
+
+        assert row[columns.index("id")] == 1
+        assert isinstance(row[columns.index("id")], int)
+
+        assert row[columns.index("name")] == "Alice"
+        assert isinstance(row[columns.index("name")], str)
+
+        assert row[columns.index("price")] == 19.99
+        assert isinstance(row[columns.index("price")], float)
+
+        assert row[columns.index("active")] is True
+        assert isinstance(row[columns.index("active")], bool)
+
+        assert row[columns.index("created_at")] == datetime.datetime(2024, 6, 15, 10, 30, 0)
+
+        assert row[columns.index("birth_date")] == datetime.date(1990, 3, 25)
+
+    def test_false_bool_is_falsy(self, mock_ai_server):
+        """Critical: 'false' must become Python False, not truthy string."""
+        conn = connect(engine_id="test-id")
+        cursor = conn.cursor()
+
+        raw = [{"active": "false"}]
+        rows, columns = cursor._parse_select_result(raw)
+
+        assert rows[0][0] is False
+        assert not rows[0][0]  # Must be falsy!
+
+    def test_none_preserved(self, mock_ai_server):
+        """None values should stay None, not get coerced."""
+        conn = connect(engine_id="test-id")
+        cursor = conn.cursor()
+
+        raw = [{"id": "1", "name": None}]
+        rows, columns = cursor._parse_select_result(raw)
+
+        assert rows[0][columns.index("id")] == 1
+        assert rows[0][columns.index("name")] is None
