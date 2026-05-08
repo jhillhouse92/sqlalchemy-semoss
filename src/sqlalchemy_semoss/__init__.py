@@ -59,6 +59,7 @@ from .orm import (
     SemossBase,
     SemossModel,
     QueryBuilder,
+    VectorMixin,
 )
 
 # PEP 249 module-level attributes
@@ -98,4 +99,5 @@ __all__ = [
     "SemossBase",
     "SemossModel",
     "QueryBuilder",
+    "VectorMixin",
 ]

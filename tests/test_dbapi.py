@@ -80,6 +80,14 @@ class TestEscape:
         result = SemossCursor._escape(b"\x00\xff")
         assert "00ff" in result
 
+    def test_list_vector(self):
+        """Python list → pgvector literal."""
+        assert SemossCursor._escape([0.1, 0.2, 0.3]) == "'[0.1,0.2,0.3]'"
+
+    def test_list_vector_ints(self):
+        """Integer list → pgvector literal."""
+        assert SemossCursor._escape([1, 2, 3]) == "'[1,2,3]'"
+
 
 class TestParseColumnOrder:
     """Unit tests for the SQL column-order parser."""
@@ -198,6 +206,23 @@ class TestCoerceValue:
     def test_timestamp(self):
         assert _coerce_value("2024-06-15 10:30:00") == datetime.datetime(2024, 6, 15, 10, 30, 0)
         assert _coerce_value("2025-01-01 00:00:00") == datetime.datetime(2025, 1, 1, 0, 0, 0)
+
+    def test_vector_literal(self):
+        """pgvector string → list of floats."""
+        assert _coerce_value("[0.1,0.2,0.3]") == [0.1, 0.2, 0.3]
+
+    def test_vector_no_spaces(self):
+        assert _coerce_value("[0.9,0.1,0]") == [0.9, 0.1, 0.0]
+
+    def test_vector_large(self):
+        vec_str = "[" + ",".join(str(0.001 * i) for i in range(10)) + "]"
+        result = _coerce_value(vec_str)
+        assert isinstance(result, list)
+        assert len(result) == 10
+
+    def test_vector_invalid_stays_string(self):
+        """Bracket string with non-numeric content stays as string."""
+        assert _coerce_value("[hello,world]") == "[hello,world]"
 
     def test_plain_string_unchanged(self):
         assert _coerce_value("Alice") == "Alice"

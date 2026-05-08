@@ -14,6 +14,7 @@ Usage::
 """
 
 import datetime
+import json
 import re
 
 from .exceptions import InterfaceError, ProgrammingError
@@ -138,6 +139,7 @@ def _coerce_value(value):
     Conversion rules (applied in order):
     - None / non-string → returned unchanged
     - "true" / "false" (case-insensitive) → bool
+    - "[0.1,0.2,...]" (pgvector literal) → list[float]
     - Integer pattern (no dot, no 'e') → int
     - Numeric pattern → float
     - "YYYY-MM-DD HH:MM:SS" → datetime.datetime
@@ -155,6 +157,13 @@ def _coerce_value(value):
         return True
     if low == "false":
         return False
+
+    # pgvector literal: "[0.1,0.2,0.3]"
+    if len(value) >= 3 and value[0] == "[" and value[-1] == "]":
+        try:
+            return [float(x) for x in value[1:-1].split(",")]
+        except (ValueError, OverflowError):
+            pass
 
     # Integer (no decimal point, no exponent notation)
     if "." not in value and "e" not in low:
@@ -398,6 +407,19 @@ class SemossCursor:
             return str(value)
         if isinstance(value, str):
             return "'" + value.replace("'", "''") + "'"
+        if isinstance(value, dict):
+            # JSONB: serialize Python dict to valid JSON string
+            return "'" + json.dumps(value).replace("'", "''") + "'"
+        if isinstance(value, list):
+            # pgvector literal: [0.1, 0.2, 0.3] → '[0.1,0.2,0.3]'
+            return "'[" + ",".join(str(v) for v in value) + "]'"
+        # numpy ndarray support
+        try:
+            import numpy as np
+            if isinstance(value, np.ndarray):
+                return "'[" + ",".join(str(v) for v in value.flat) + "]'"
+        except ImportError:
+            pass
         if isinstance(value, bytes):
             return "E'\\\\x" + value.hex() + "'"
         if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
